@@ -168,12 +168,12 @@ spec:
     spec:
       containers:
         - name: hdfs-journalnode
-          image: uhopper/hadoop-namenode:2.7.2
+          image: radarbase/k8s-hadoop-namenode:3.0.3
           env:
             - name: HADOOP_CUSTOM_CONF_DIR
               value: /etc/hadoop-custom-conf
           command: ["/entrypoint.sh"]
-          args: ["/opt/hadoop-2.7.2/bin/hdfs", "--config", "/etc/hadoop", "journalnode"]
+          args: ["/opt/hadoop-3.0.3/bin/hdfs", "--config", "/etc/hadoop", "journalnode"]
           ports:
           - containerPort: 8485
             name: jn

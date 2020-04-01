@@ -73,12 +73,16 @@ spec:
       tolerations:
 {{ toYaml .Values.tolerations | indent 8 }}
       {{- end }}
+      {{- if .Values.hostNetworkEnabled }}
       hostNetwork: true
       hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
+      {{- else }}
+      dnsPolicy: ClusterFirst
+      {{- end }}
       containers:
         - name: datanode
-          image: uhopper/hadoop-datanode:2.7.2
+          image: radarbase/k8s-hadoop-datanode:3.0.3
           env:
             - name: HADOOP_CUSTOM_CONF_DIR
               value: /etc/hadoop-custom-conf

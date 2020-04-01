@@ -56,7 +56,7 @@ document them here.
 Here's how one can check if data locality in the namenode works.
   1. Launch a HDFS client pod and go inside the pod.
   ```
-  $ kubectl run -i --tty hadoop --image=uhopper/hadoop:2.7.2  \
+  $ kubectl run -i --tty hadoop --image=radarbase/k8s-hadoop:3.0.3  \
       --generator="run-pod/v1" --command -- /bin/bash
   ```
   2. Inside the pod, create a simple text file on HDFS.
