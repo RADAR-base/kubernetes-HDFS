@@ -8,10 +8,8 @@ metadata:
     chart: {{ template "hdfs-k8s.subchart" . }}
     release: {{ .Release.Name }}
   annotations:
-    # TODO: Deprecated. Replace tolerate-unready-endpoints with
-    # v1.Service.PublishNotReadyAddresses.
-    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
 spec:
+  publishNotReadyAddresses: true
   ports:
   - port: 8020
     name: fs
@@ -61,7 +59,33 @@ data:
   # zookeeper dir and journal node data entries.
   # For standby namenode, the initialization steps will simply receieve
   # the first batch of metadata updates from the journal node.
-  format-and-run.sh: |
+  format-and-run-zkfc.sh: |
+    #!/usr/bin/env bash
+    # Exit on error. Append "|| true" if you expect an error.
+    set -o errexit
+    # Exit on error inside any functions or subshells.
+    set -o errtrace
+    # Do not allow use of undefined vars. Use ${VAR:-} to use an undefined VAR
+    set -o nounset
+    # Catch an error in command pipes. e.g. mysqldump fails (but gzip succeeds)
+    # in `mysqldump |gzip`
+    set -o pipefail
+    # Turn on traces, useful while debugging.
+    set -o xtrace
+
+    _HDFS_BIN=$HADOOP_PREFIX/bin/hdfs
+    _METADATA_DIR=/hadoop/dfs/name/current
+    if [[ "$MY_POD" = "$NAMENODE_POD_0" ]]; then
+      _ZKFC_FORMATTED=/hadoop/dfs/name/current/.hdfs-k8s-zkfc-formatted
+      if [[ ! -f $_ZKFC_FORMATTED ]]; then
+        _OUT=$($_HDFS_BIN --config $HADOOP_CONF_DIR zkfc -formatZK -nonInteractive 2>&1)
+        # zkfc masks fatal exceptions and returns exit code 0
+        (echo $_OUT | grep -q "FATAL") && exit 1
+        touch $_ZKFC_FORMATTED
+      fi
+    fi
+    $HADOOP_PREFIX/bin/hdfs --config $HADOOP_CONF_DIR zkfc
+  format-and-run-namenode.sh: |
     #!/usr/bin/env bash
     # Exit on error. Append "|| true" if you expect an error.
     set -o errexit
@@ -83,13 +107,6 @@ data:
               -nonInteractive hdfs-k8s ||
               (rm -rf $_METADATA_DIR; exit 1)
       fi
-      _ZKFC_FORMATTED=/hadoop/dfs/name/current/.hdfs-k8s-zkfc-formatted
-      if [[ ! -f $_ZKFC_FORMATTED ]]; then
-        _OUT=$($_HDFS_BIN --config $HADOOP_CONF_DIR zkfc -formatZK -nonInteractive 2>&1)
-        # zkfc masks fatal exceptions and returns exit code 0
-        (echo $_OUT | grep -q "FATAL") && exit 1
-        touch $_ZKFC_FORMATTED
-      fi
     elif [[ "$MY_POD" = "$NAMENODE_POD_1" ]]; then
       if [[ ! -d $_METADATA_DIR ]]; then
         $_HDFS_BIN --config $HADOOP_CONF_DIR namenode -bootstrapStandby  \
@@ -97,9 +114,7 @@ data:
             (rm -rf $_METADATA_DIR; exit 1)
       fi
     fi
-    $HADOOP_PREFIX/sbin/hadoop-daemon.sh --config $HADOOP_CONF_DIR start zkfc
     $_HDFS_BIN --config $HADOOP_CONF_DIR namenode
-
   # A start script that will just hang indefinitely. A user can then get
   # inside the pod and debug. Or a user can conduct a custom manual operations.
   do-nothing.sh: |
@@ -172,7 +187,62 @@ spec:
       {{- end }}
       containers:
         # TODO: Support hadoop version as option.
-        - name: hdfs-namenode
+        - name: zkfc
+          image: radarbase/k8s-hadoop-namenode:3.0.3
+          env:
+            - name: HADOOP_CUSTOM_CONF_DIR
+              value: /etc/hadoop-custom-conf
+            - name: MULTIHOMED_NETWORK
+              value: "0"
+            # Used by the start script below.
+            - name: MY_POD
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NAMENODE_POD_0
+              value: {{ template "namenode-pod-0" . }}
+            - name: NAMENODE_POD_1
+              value: {{ template "namenode-pod-1" . }}
+          command: ['/bin/sh', '-c']
+          # The start script is provided by a config map.
+          args:
+            - /entrypoint.sh "/nn-scripts/{{ .Values.zkfcStartScript }}"
+          ports:
+          - containerPort: 8019
+            name: zkfc
+          livenessProbe:
+            tcpSocket:
+              port: zkfc
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: zkfc
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: nn-scripts
+              mountPath: /nn-scripts
+              readOnly: true
+            # Mount a subpath of the volume so that the name subdir would be a
+            # brand new empty dir. This way, we won't get affected by existing
+            # files in the volume top dir.
+            - name: metadatadir
+              mountPath: /hadoop/dfs/name
+              subPath: name
+            - name: hdfs-config
+              mountPath: /etc/hadoop-custom-conf
+              readOnly: true
+            {{- if .Values.global.kerberosEnabled }}
+            - name: kerberos-config
+              mountPath: /etc/krb5.conf
+              subPath: {{ .Values.global.kerberosConfigFileName }}
+              readOnly: true
+            - name: kerberos-keytab-copy
+              mountPath: /etc/security/
+              readOnly: true
+            {{- end }}
+        - name: namenode
           image: radarbase/k8s-hadoop-namenode:3.0.3
           env:
             - name: HADOOP_CUSTOM_CONF_DIR
@@ -197,6 +267,16 @@ spec:
             name: fs
           - containerPort: 50070
             name: http
+          livenessProbe:
+            tcpSocket:
+              port: fs
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: fs
+            initialDelaySeconds: 5
+            periodSeconds: 10
           volumeMounts:
             - name: nn-scripts
               mountPath: /nn-scripts

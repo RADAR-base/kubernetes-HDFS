@@ -1,4 +1,4 @@
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ template "hdfs-k8s.client.fullname" . }}
@@ -32,7 +32,7 @@ spec:
               value: "0"
           command: ['/bin/sh', '-c']
           args:
-            - /entrypoint.sh /usr/bin/tail -f /var/log/dmesg
+            - /entrypoint.sh /bin/sleep 999d
           volumeMounts:
             - name: hdfs-config
               mountPath: /etc/hadoop-custom-conf
